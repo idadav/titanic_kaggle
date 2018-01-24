@@ -104,10 +104,9 @@ titanic_train = titanic_train %>%
 ```
 
 
-Next I will transform relevant variables to factor to function properly with my model. Survived and Pclass needs these transformations.
+Next I will transform relevant variables to factor to function properly with my model. Survived needs this transformation.
 ```{r}
 titanic_train$Survived = as.factor(titanic_train$Survived)
-titanic_train$Pclass = as.numeric(titanic_train$Pclass)
 ```
 
 
