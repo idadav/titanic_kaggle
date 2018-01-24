@@ -1,0 +1,187 @@
+---
+title: "Titanic"
+author: "Ida Davidsson"
+date: "02/01/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+> Import
+
+Filling all missing values with NA to start with
+
+```{r import}
+setwd("~/Documents/Programming/Kaggle/Titanic")
+dyn.load('/Library/Java/JavaVirtualMachines/jdk-9.0.1.jdk/Contents/Home/lib/server/libjvm.dylib')
+library(tidyverse)
+library(randomForest)
+library(FSelector)
+library(caret)
+library(mice)
+
+titanic_train = read.csv("train.csv", na.strings = c(""))
+titanic_test = read.csv("test.csv", na.strings = c(""))
+glimpse(titanic_train)
+View(titanic_train)
+```
+
+Let's find out where there are missing values
+```{r}
+na.columns = which(colSums(is.na(titanic_train)) > 0)
+sort(colSums(sapply(titanic_train[na.columns], is.na)), decreasing = TRUE)
+paste('There are', length(na.columns), 'columns with missing values')
+
+titanic_train$Embarked[which(is.na(titanic_train$Embarked))] = "S"
+```
+
+The missing values in cabin are simply too many to do anything valuable with, so I will leave cabin as it is. Age however, needs to be dealt with. The missing values in Embarked are known to be passengers from Southhampton so I will simply impute S there.
+
+I will use a linear regression for prediciting ages
+```{r}
+# split dataset based on missing variables
+age_train = titanic_train[!is.na(titanic_train$Age), ]
+age_test = titanic_train[is.na(titanic_train$Age), ]
+
+# model with all variables that can be deemed to predict age
+m1 = lm(Age ~ Survived + Pclass + Sex + SibSp + Parch + Fare + Embarked, data = titanic_train) 
+summary(m1)
+
+# predict values where they are missing
+age_test$Age = predict(m1, newdata=age_test)
+
+# bind together
+titanic_train = age_train %>%
+  bind_rows(age_test)
+
+sum(is.na(titanic_train$Age))
+```
+
+> Data exploration
+
+Let'screate som basics charts to visualise the data that we are workign with.
+```{r}
+count = 0
+
+# Amount of females / males
+summary(titanic_train$Sex)
+
+# Amount survived / not survived
+titanic_train %>%
+  count(Survived,
+        ifelse(Survived == 1 & Sex == "female", count +1, count))
+
+# looking at ages
+ggplot(data=titanic_train, aes(x=Age)) + 
+  geom_histogram(aes(colour=I("white"))) + 
+  theme_minimal()
+
+boxplot(titanic_train$Age)
+
+# distribution of Pclass
+p1 = 0
+p2 = 0
+p3 = 0
+
+titanic_train %>%
+  count(ifelse(Pclass == 1, p1 + 1, 
+               ifelse(Pclass == 2, p2 + 2, p3 + 3)))
+  
+
+```
+
+There are a lot more males than females, and the mean age seems to reside in the 20-40s area, and the majority belonging to the lowest class.
+
+> Feature Engineering
+
+I will create a family category in order to assess if the chances of survival was higher if one travelled with one's family. If someone belongs to a family (thus having 1 or more in SibSp & 1 or more in Parch category) they will be assgined binary value '1', otherwise '0'
+
+```{r}
+titanic_train = titanic_train %>%
+  mutate(family = ifelse(SibSp >= 1 & Parch >= 1, 1, 0))
+```
+
+
+Next I will transform relevant variables to factor to function properly with my model. Survived and Pclass needs these transformations.
+```{r}
+titanic_train$Survived = as.factor(titanic_train$Survived)
+titanic_train$Pclass = as.numeric(titanic_train$Pclass)
+```
+
+
+> Variable selection
+
+I will use FSelector to conduct a chi squared goodness of fit test on my variables to determine which ones are relevant.
+```{r}
+chi.squared(formula=Survived ~., data=titanic_train)
+
+```
+
+> Random Forest
+
+I will use a Random Forest model as this is a good way to make binary predictions. Inn our case: 0 - Not survived and 1 - Survived
+
+Splitting data set for the model
+```{r}
+# split into training and test
+sample = floor(0.70 * nrow(titanic_train))
+set.seed(765)
+train_ind = sample(seq_len(nrow(titanic_train)), size = sample)
+
+train = titanic_train[train_ind, ]
+test = titanic_train[-train_ind, ]
+```
+
+
+First model
+```{r}
+m1 = randomForest(Survived ~ Pclass + Sex + Age + Embarked + family,
+             data=train)
+
+testing = predict(m1, newdata=test)
+
+summary(testing)
+```
+
+I will now transform the actual test set to make my predictions
+```{r}
+na.columns = which(colSums(is.na(titanic_test)) > 0)
+sort(colSums(sapply(titanic_test[na.columns], is.na)), decreasing = TRUE)
+paste('There are', length(na.columns), 'columns with missing values')
+
+titanic_test$Embarked[which(is.na(titanic_test$Embarked))] = "S"
+
+# split dataset based on missing variables
+age_train1 = titanic_test[!is.na(titanic_test$Age), ]
+age_test1 = titanic_test[is.na(titanic_test$Age), ]
+
+# model with all variables that can be deemed to predict age
+m1 = lm(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked, data = titanic_test) 
+summary(m1)
+
+# predict values where they are missing
+age_test1$Age = predict(m1, newdata=age_test1)
+
+# bind together
+titanic_test = age_train1 %>%
+  bind_rows(age_test1)
+
+sum(is.na(titanic_test$Age))
+
+
+titanic_test = titanic_test %>%
+  mutate(family = ifelse(SibSp >= 1 & Parch >= 1, 1, 0))
+
+
+```
+
+> Making prediction
+
+```{r}
+# adding to the actual test set
+titanic_test1 = titanic_test %>%
+  mutate(Survived = predict(m1, newdata=titanic_test))
+```
+
